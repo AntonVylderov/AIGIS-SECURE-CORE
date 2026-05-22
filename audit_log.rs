@@ -1,11 +1,11 @@
-//! Audit log with tamper-evident BLAKE3 hashing.
-//! Each entry is linked to the previous via its hash.
+//! Tamper‑evident audit log with BLAKE3 hashing.
+//! Each entry is cryptographically linked to the previous one.
 
 use blake3::Hasher;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AuditEntry {
     pub id: u64,
     pub timestamp: DateTime<Utc>,
@@ -16,13 +16,14 @@ pub struct AuditEntry {
     pub hash: String,
 }
 
+/// Audit log – a blockchain‑like append‑only structure.
 pub struct AuditLog {
     chain: Vec<AuditEntry>,
 }
 
 impl AuditLog {
+    /// Creates a new audit log with a genesis entry.
     pub fn new() -> Self {
-        let genesis_hash = Self::hash_entry(0, &Utc::now(), "SYSTEM", "GENESIS", "INIT", "");
         let genesis = AuditEntry {
             id: 0,
             timestamp: Utc::now(),
@@ -30,12 +31,12 @@ impl AuditLog {
             action: "GENESIS".into(),
             decision: "INIT".into(),
             previous_hash: "0".repeat(64),
-            hash: genesis_hash,
+            hash: Self::compute_hash(0, &Utc::now(), "SYSTEM", "GENESIS", "INIT", ""),
         };
         Self { chain: vec![genesis] }
     }
 
-    fn hash_entry(
+    fn compute_hash(
         id: u64,
         ts: &DateTime<Utc>,
         actor: &str,
@@ -49,6 +50,7 @@ impl AuditLog {
         hasher.finalize().to_hex().to_string()
     }
 
+    /// Appends a new event to the log.
     pub fn log_event(
         &mut self,
         actor: &str,
@@ -58,7 +60,7 @@ impl AuditLog {
         let prev = self.chain.last().ok_or("Empty chain")?;
         let id = prev.id + 1;
         let ts = Utc::now();
-        let hash = Self::hash_entry(id, &ts, actor, action, decision, &prev.hash);
+        let hash = Self::compute_hash(id, &ts, actor, action, decision, &prev.hash);
         let entry = AuditEntry {
             id,
             timestamp: ts,
@@ -72,11 +74,12 @@ impl AuditLog {
         Ok(entry)
     }
 
+    /// Verifies the integrity of the whole chain.
     pub fn verify_integrity(&self) -> bool {
         for i in 1..self.chain.len() {
             let curr = &self.chain[i];
             let prev = &self.chain[i - 1];
-            let recomputed = Self::hash_entry(
+            let recomputed = Self::compute_hash(
                 curr.id,
                 &curr.timestamp,
                 &curr.actor,
@@ -89,5 +92,40 @@ impl AuditLog {
             }
         }
         true
+    }
+
+    /// Returns an iterator over the entries.
+    pub fn iter(&self) -> std::slice::Iter<AuditEntry> {
+        self.chain.iter()
+    }
+}
+
+impl Default for AuditLog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_append_and_verify() {
+        let mut log = AuditLog::new();
+        log.log_event("alice", "LOGIN", "ALLOW").unwrap();
+        log.log_event("bob", "TRANSFER", "BLOCK").unwrap();
+        assert!(log.verify_integrity());
+        assert_eq!(log.iter().count(), 3); // genesis + 2
+    }
+
+    #[test]
+    fn test_tampered_hash_detected() {
+        let mut log = AuditLog::new();
+        log.log_event("alice", "LOGIN", "ALLOW").unwrap();
+        // Simulate tampering
+        let mut entry = log.chain.last_mut().unwrap();
+        entry.hash = "tampered".to_string();
+        assert!(!log.verify_integrity());
     }
 }
