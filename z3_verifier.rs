@@ -1,5 +1,5 @@
 //! Transaction amount verification using Z3 theorem prover.
-//! Global solver is reused to avoid expensive reinitialisation.
+//! The solver is initialised once and reused.
 
 use once_cell::sync::Lazy;
 use z3::{Config, Context, Solver, ast::Int};
@@ -11,7 +11,7 @@ static Z3: Lazy<(Context, Solver)> = Lazy::new(|| {
     (ctx, solver)
 });
 
-/// Returns `true` if amount is strictly between 0 and 1_000_000.
+/// Returns `true` if `amount` is strictly between 0 and 1_000_000.
 pub fn verify_transaction_amount(amount: u64) -> bool {
     let (ctx, solver) = &*Z3;
     let x = Int::from_u64(ctx, amount);
@@ -24,4 +24,23 @@ pub fn verify_transaction_amount(amount: u64) -> bool {
     let result = solver.check();
     solver.pop(1);
     matches!(result, z3::SatResult::Unsat)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_amounts() {
+        assert!(verify_transaction_amount(1));
+        assert!(verify_transaction_amount(500_000));
+        assert!(verify_transaction_amount(999_999));
+    }
+
+    #[test]
+    fn test_invalid_amounts() {
+        assert!(!verify_transaction_amount(0));
+        assert!(!verify_transaction_amount(1_000_000));
+        assert!(!verify_transaction_amount(2_000_000));
+    }
 }
